@@ -1,0 +1,392 @@
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, simpledialog #Mga modules para sa GUI
+import csv
+import random
+import os
+import matplotlib.pyplot as plt 
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg #Mga modules para sa pag-generate ng chart
+
+class Course:
+    def __init__(self, course_id, name, num_quizzes):
+        self.id = course_id
+        self.name = name
+        self.num_quizzes = num_quizzes
+
+class Student:
+    def __init__(self, student_id, name):
+        self.id = student_id
+        self.name = name
+
+class Score:
+    def __init__(self, student_id, course_id, scores):
+        self.student_id = student_id
+        self.course_id = course_id
+        self.scores = scores
+
+class ClassRecordApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Class Record System")
+
+        self.students = {}
+        self.courses = {}
+        self.scores = []
+        self.undo_stack = []
+
+        self.setup_ui()
+
+    def setup_ui(self):
+        button_frame = tk.Frame(self.root)
+        button_frame.pack(pady=10)
+# ang pady is the index loction horizontaly spacing around the button
+# ang padx is the index loction verticaly spacing around the button
+        tk.Button(button_frame, text="Upload CSV", command=self.upload_csv).grid(row=0, column=0, padx=5)
+        tk.Button(button_frame, text="Add Student", command=self.add_student).grid(row=0, column=1, padx=5)
+        tk.Button(button_frame, text="Add Course", command=self.add_course).grid(row=0, column=2, padx=5)
+        tk.Button(button_frame, text="Display Records", command=self.display_records).grid(row=0, column=3, padx=5)
+        tk.Button(button_frame, text="Honor Students", command=self.display_honor_students).grid(row=0, column=4, padx=5)
+        tk.Button(button_frame, text="Undo", command=self.undo).grid(row=0, column=5, padx=5)
+        tk.Button(button_frame, text="Save to CSV", command=self.save_csv).grid(row=0, column=6, padx=5)
+        tk.Button(button_frame, text="Delete Record", command=self.delete_record).grid(row=0, column=7, padx=5)
+        tk.Button(button_frame, text="Show Chart", command=self.show_chart).grid(row=0, column=8, padx=5)
+
+        self.tree = ttk.Treeview(self.root)
+        self.tree.pack(fill="both", expand=True)
+        self.tree.tag_configure('fail', foreground='red') #tanan ma usub kay naka treeview
+        self.tree.tag_configure('pass', foreground='green')
+
+        self.filter_var = tk.StringVar()
+        filter_frame = tk.Frame(self.root)
+        filter_frame.pack() #.pack pang add sa filter frame sa main window
+        tk.Label(filter_frame, text="Filter by Course:").pack(side="left")
+        self.filter_combo = ttk.Combobox(filter_frame, textvariable=self.filter_var, values=["All"] + list(self.courses.keys()), state="readonly")
+        self.filter_combo.pack(side="left")
+        self.filter_combo.bind("<<ComboboxSelected>>", lambda e: self.display_records())
+
+    def upload_csv(self):
+        filepath = filedialog.askopenfilename(filetypes=[("CSV Files", "*.csv")])
+        if not filepath:
+            return
+
+        self.students.clear() 
+        self.courses.clear()
+        self.scores.clear()
+
+        with open(filepath, newline='', encoding='utf-8') as csvfile: #with open pang open sa file then mo close siya automatically kung mahuman na
+        # ang utf-8 kay encoding sa file para ma read siya sa python kay dili siya maka read ug special characters
+            # Magbasa sa CSV file gamit ang DictReader para ma-access ang mga column by name    
+            reader = csv.DictReader(csvfile)
+            quiz_columns = [col.strip() for col in reader.fieldnames if col and col.strip().startswith("Quiz #")]
+            for row in reader:
+                if not row:
+                    continue
+                student_id = row.get("ID", "").strip()
+                student_name = row.get("Name", "").strip()
+                course_name = row.get("Course", "").strip()
+                scores = [int(row[q]) for q in quiz_columns if row.get(q, "").isdigit()]
+
+                if not student_id or not student_name or not course_name:
+                    continue
+
+                if student_id not in self.students:
+                    self.students[student_id] = Student(student_id, student_name)
+                if course_name not in self.courses:
+                    self.courses[course_name] = Course(course_name, course_name, len(quiz_columns))
+                self.scores.append(Score(student_id, course_name, scores))
+
+        #messagebox.showinfo mu pop up ug message sa user 
+        messagebox.showinfo("Success", f"Uploaded {len(self.students)} students and {len(self.courses)} courses.")
+        self.display_records()
+
+    def save_csv(self):
+        filename = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV File", "*.csv")])
+        if not filename:
+            return
+#asksaveasfilename pang save sa file then mu pop up ug dialog box para ma save ang file
+        max_quizzes = max((c.num_quizzes for c in self.courses.values()), default=0)
+        headers = ["ID", "Name", "Course"] + [f"Quiz #{i+1}" for i in range(max_quizzes)] + ["Average"]
+
+        with open(filename, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(headers) #writerow pang write sa header sa csv file
+            for score in self.scores:
+                student = self.students.get(score.student_id)
+                course = self.courses.get(score.course_id)
+                if student and course:
+                    row = [student.id, student.name, course.name]
+                    row += [str(score.scores[i]) if i < len(score.scores) else "" for i in range(max_quizzes)]
+                    avg_val = (sum(score.scores) / len(score.scores)) if score.scores else "" #else "" pang check kung empty ang scores
+                    # Kung ang avg_val kay dili empty, i-format siya sa 2 decimal places
+                    row.append(f"{avg_val:.2f}" if avg_val else "")
+                    writer.writerow(row)
+        messagebox.showinfo("Saved", f"Data saved to {filename}")
+
+    def add_student(self):
+        win = tk.Toplevel(self.root) #tk Toplevel pang create ug new window para sa pag-add ug student sa GUI
+        # ang Toplevel kay para sa mga additional windows nga dili main window
+        #tk mao ang module sa tkinter nga pang create ug GUI
+        win.title("Add Student") #win title pang set sa title sa window inag pop up
+
+        tk.Label(win, text="Student Name:").grid(row=0, column=0) #tk.Label pang create ug label sa GUI sa pag-add ug student
+        # ang grid kay pang set sa position sa label sa window
+        name_entry = tk.Entry(win) # pang create ug entry box para sa pag-input sa student name
+        #ang tk.Entry (win) kay pang create ug input box para sa pag-input sa student name
+        # ang win kay para sa window nga gi-create nato
+        name_entry.grid(row=0, column=1)
+
+        tk.Label(win, text="Select Course:").grid(row=1, column=0)
+        course_var = tk.StringVar()
+        course_menu = ttk.Combobox(win, textvariable=course_var, values=list(self.courses.keys()))
+        #ttk.Combobox pang create ug dropdown menu para sa pag-select sa course
+        # ang textvariable kay para sa variable nga mag-hold sa selected course
+        course_menu.grid(row=1, column=1)
+
+        def submit():
+            name = name_entry.get().strip()
+            course_name = course_var.get().strip()
+
+            if not name or not course_name:
+                messagebox.showwarning("Input Error", "Please enter all fields.")
+                return
+
+            student_id = str(random.randint(1000, 9999)) # pang generate ug random student ID
+            #ang kina unhan 1000 kay pang set sa minimum value sa student ID maximum kay 9999
+            num_quizzes = self.courses[course_name].num_quizzes
+
+            scores = []
+            for i in range(num_quizzes):
+                score = simpledialog.askinteger("Quiz Score", f"Enter score for Quiz #{i+1}:", minvalue=0, maxvalue=100)
+                #simpledialog.askinteger pang ask sa user ug integer value para sa quiz score
+                #method ni mag pop up ug dialog box para sa pag-input sa score
+                if score is None:
+                    return
+                scores.append(score) #i append ang score sa scores list para ma save ang scores sa student
+
+            self.students[student_id] = Student(student_id, name)
+            self.scores.append(Score(student_id, course_name, scores))
+            self.undo_stack.append(('add_student', student_id, course_name, scores))
+            win.destroy() #win.destroy pang close sa window inag submit sa student
+            #destroy nga method function pang close sa window
+            self.display_records()
+
+        tk.Button(win, text="Add", command=submit).grid(row=2, column=0, columnspan=2)
+
+    def add_course(self):
+        win = tk.Toplevel(self.root)
+        win.title("Add Course")
+
+        tk.Label(win, text="Course Name:").grid(row=0, column=0)
+        name_entry = tk.Entry(win)
+        name_entry.grid(row=0, column=1)
+
+        tk.Label(win, text="Number of Quizzes:").grid(row=1, column=0)
+        quiz_entry = tk.Entry(win)
+        quiz_entry.grid(row=1, column=1)
+
+        def submit():
+            name = name_entry.get().strip()
+            try:
+                num_quizzes = int(quiz_entry.get())
+            except ValueError:
+                messagebox.showwarning("Input Error", "Number of quizzes must be an integer.")
+                return
+
+            if name in self.courses:
+                messagebox.showinfo("Info", "Course already exists.")
+                return
+
+            self.courses[name] = Course(name, name, num_quizzes)
+            self.filter_combo["values"] = ["All"] + list(self.courses.keys()) #filter_combo["values"] pang update sa filter combobox values
+            win.destroy()
+
+        tk.Button(win, text="Add", command=submit).grid(row=2, column=0, columnspan=2)
+
+    def display_records(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        max_quizzes = max((c.num_quizzes for c in self.courses.values()), default=0)
+        columns = ["ID", "Name", "Course"] + [f"Quiz #{i+1}" for i in range(max_quizzes)] + ["Average"]
+        self.tree["columns"] = columns
+        self.tree["show"] = "headings" #show headings kay para ma display ang mga column headers sa treeview
+
+        for col in columns: #mao ni ang loop para sa pag-set sa mga column sa treeview
+            #ang anchor kay para sa alignment sa text sa column
+            #ang center kay para sa center alignment sa text sa column
+            anchor = "center" if col.startswith("Quiz #") or col == "Average" else "w"
+            self.tree.heading(col, text=col, anchor=anchor) #anchor=anchor pasabot sa alignment sa text sa column equal sa anchor variable
+            self.tree.column(col, width=100, anchor=anchor)
+
+        selected_course = self.filter_var.get() #filter_var kay para sa selected course sa filter combobox
+        #get kay para sa pagkuha sa value sa filter_var variable
+        for score in self.scores:
+            student = self.students.get(score.student_id)
+            course = self.courses.get(score.course_id)
+            if student and course:
+                if selected_course and selected_course != "All" and course.name != selected_course: #all kay para sa pag-display sa tanan records
+                    # kung ang selected course kay dili "All" ug dili match sa course name, mo-skip siya
+                    continue
+                quiz_strs = [str(s) for s in score.scores]
+                avg_val = (sum(score.scores) / len(score.scores)) if score.scores else None
+                if avg_val is not None:
+                    avg_str = f"{avg_val:.2f}"
+                    tag = 'pass' if avg_val >= 75 else 'fail'
+                    avg_display = f"{avg_str} {'✔' if avg_val >= 75 else '✘'}"
+                else:
+                    avg_display = ""
+                    tag = ''
+                row = [student.id, student.name, course.name] + quiz_strs + [""] * (max_quizzes - len(quiz_strs)) + [avg_display]
+                self.tree.insert("", "end", values=row, tags=(tag,))
+    
+    def delete_record(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Delete", "No record selected.")
+            return
+        for item in selected:
+            values = self.tree.item(item, "values")
+            student_id = values[0]
+            course_name = values[2]
+            self.scores = [s for s in self.scores if not (s.student_id == student_id and s.course_id == course_name)]
+            self.tree.delete(item) #delete ang item sa treeview kay para ma remove ang record sa student ug course
+            #method nga delete dayun gamiton para maka delete ug record sa treeview
+        self.display_records()
+
+    def display_honor_students(self):
+        honors = []
+        for score in self.scores:
+            if score.scores:
+                avg = sum(score.scores) / len(score.scores)
+                if avg > 90:
+                    student = self.students.get(score.student_id)
+                    course = self.courses.get(score.course_id)
+                    honors.append((student.id, student.name, course.name, avg))
+
+        text = "\n".join([f"{sid} | {name} | {course} | {avg:.2f}" for sid, name, course, avg in honors]) if honors else "No honor students found."
+        messagebox.showinfo("Honor Students", text)
+        #join method pang combine sa mga string sa list ug i-separate sila ug new line
+    def undo(self):
+        if not self.undo_stack:
+            messagebox.showinfo("Undo", "Nothing to undo.")
+            return
+        action = self.undo_stack.pop()
+        if action[0] == 'add_student':
+            student_id = action[1]
+            if student_id in self.students:
+                del self.students[student_id]
+                self.scores = [s for s in self.scores if s.student_id != student_id]
+            self.display_records()
+
+    
+    def show_chart(self):
+        if not self.scores:
+            messagebox.showinfo("Chart", "No records to show.")
+            return
+
+        chart_window = tk.Toplevel(self.root) #root kay ang main window sa application
+        #Toplevel kay pang create ug new window para sa chart
+        chart_window.title("Course-wise Score Chart")
+
+        tk.Label(chart_window, text="Select Course:").pack(pady=5) #.pack pang add sa label sa chart window
+        #tk.Label pang create ug label sa chart window
+        selected_course = tk.StringVar()
+        course_menu = ttk.Combobox(chart_window, textvariable=selected_course, values=list(self.courses.keys()), state="readonly")
+        #readonly kay para dili ma-edit ang course selection
+        course_menu.pack()
+
+        chart_canvas_frame = tk.Frame(chart_window) #canvas_frame pang create ug frame para sa chart
+        chart_canvas_frame.pack(fill="both", expand=True)#fill="both" pang fill sa frame sa available space
+        #expand=True pang allow sa frame nga mo expand sa available space kay para ma display ang chart sa full size sa window
+
+        def draw_chart(event=None):
+            for widget in chart_canvas_frame.winfo_children(): #winfo_children pang get sa mga child widgets sa frame
+                if isinstance(widget, FigureCanvasTkAgg): #pang check kung ang widget kay FigureCanvasTkAgg kay kung dili FigureCanvasTkAgg mo destroy siya
+                    #ang FigureCanvasTkAgg kay pang display sa matplotlib chart sa tkinter window
+                    widget.get_tk_widget().destroy()    #pang destroy sa existing chart kung naa na siya    
+                widget.destroy()
+
+            course_name = selected_course.get()
+            if not course_name:
+                return
+
+            names = []
+            averages = []
+            colors = []
+
+            for score in self.scores:
+                if score.course_id == course_name and score.scores:
+                    student = self.students.get(score.student_id)
+                    if student:
+                        avg = sum(score.scores) / len(score.scores)
+                        names.append(student.name)
+                        averages.append(avg)
+                        colors.append('green' if avg >= 75 else 'red')
+
+            if not names:
+                tk.Label(chart_canvas_frame, text=f"No data for course: {course_name}").pack()
+                return
+
+            fig, ax = plt.subplots(figsize=(8, 4)) #figsize pang set sa size sa chart
+            #fig kay ang figure sa chart
+            #ax kay ang axes sa chart
+            #plt.subplots pang create ug figure ug axes para sa chart
+            #8, 4 kay ang width ug height sa chart in inches
+            ax.barh(names, averages, color=colors) #barh pang create ug horizontal bar chart
+            ax.set_xlabel('Average Score') #set_xlabel pang set sa label sa x-axis
+            ax.set_title(f'Scoreboard for {course_name}')
+            ax.axvline(75, color='blue', linestyle='--', label='Passing Line')
+            ax.legend() #legend pang add sa legend sa chart
+
+            canvas = FigureCanvasTkAgg(fig, master=chart_canvas_frame)
+            canvas.draw()
+            canvas.get_tk_widget().pack(pady=10) #widget kay pang get sa tkinter widget sa canvas example sa chart
+            #pady=10 pang add ug padding sa chart sa vertical direction
+
+        course_menu.bind("<<ComboboxSelected>>", draw_chart) #bind pang bind sa event sa course selection sa draw_chart function
+        #<<ComboboxSelected>> kay event nga mo trigger kung naay course nga gi-select sa user
+def draw_chart():
+            course_name = selected_course.get() # type: ignore
+            if not course_name:
+                messagebox.showwarning("Input Error", "Please select a course.")
+                return
+
+            names = []
+            averages = []
+            colors = []
+
+            for score in self.scores: # type: ignore
+                if score.course_id == course_name and score.scores:
+                    student = self.students.get(score.student_id) # type: ignore
+                    avg = sum(score.scores) / len(score.scores)
+                    names.append(student.name)
+                    averages.append(avg)
+                    colors.append('green' if avg >= 75 else 'red')
+
+            if not names:
+                messagebox.showinfo("Chart", f"No data for course: {course_name}")
+                return
+
+            fig, ax = plt.subplots(figsize=(8, 4)) #subplots mao ni ang pang create ug figure ug axes para sa chart example sa bar chart
+            ax.barh(names, averages, color=colors)
+            ax.set_xlabel('Average Score')
+            ax.set_title(f'Scoreboard for {course_name}')
+            ax.axvline(75, color='blue', linestyle='--', label='Passing Line')
+            ax.legend()
+
+            for widget in chart_window.winfo_children(): # type: ignore
+                if isinstance(widget, FigureCanvasTkAgg):
+                    widget.get_tk_widget().destroy()
+
+            canvas = FigureCanvasTkAgg(fig, master=chart_window) # type: ignore
+            canvas.draw()
+            canvas.get_tk_widget().pack(pady=10)
+
+            tk.Button(chart_window, text="Generate Chart", command=draw_chart).pack(pady=5) # type: ignore
+
+if __name__ == "__main__": #pang check kung ang script kay gi-run as main program
+    # kung gi-run siya as main program, mag-create ug instance sa ClassRecordApp
+    # ug mag-start sa tkinter main loop
+    root = tk.Tk()
+    app = ClassRecordApp(root)
+    root.mainloop()
+
